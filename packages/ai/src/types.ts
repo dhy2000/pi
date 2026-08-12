@@ -693,6 +693,15 @@ export interface AnthropicMessagesCompat {
 	 */
 	supportsCacheControlOnTools?: boolean;
 	/**
+	 * Whether the provider supports Anthropic prompt caching (`cache_control`
+	 * markers on system prompts and messages) at all. When false, no
+	 * `cache_control` is emitted anywhere in the request. Some Anthropic-dialect
+	 * gateways translate to non-Claude upstreams whose translators reject the
+	 * field outright (e.g. "Unknown parameter: 'messages[0].content[0].cache_control'").
+	 * Default: true.
+	 */
+	supportsPromptCaching?: boolean;
+	/**
 	 * Whether the model accepts the Anthropic `temperature` request field.
 	 * Claude Opus 4.7+ rejects non-default temperature values.
 	 * Default: true.

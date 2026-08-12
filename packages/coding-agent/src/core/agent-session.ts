@@ -102,16 +102,26 @@ import type { ModelRuntime } from "./model-runtime.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
 import { exportSessionToJsonl } from "./session-export.ts";
-import type { BranchSummaryEntry, CompactionEntry, SessionEntry, SessionManager } from "./session-manager.ts";
-import { getLatestCompactionEntry } from "./session-manager.ts";
+import {
+	type BranchSummaryEntry,
+	type CompactionEntry,
+	getLatestCompactionEntry,
+	type SessionEntry,
+	type SessionManager,
+} from "./session-manager.ts";
 import type { SettingsManager } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 import { type BuildSystemPromptOptions, buildSystemPrompt } from "./system-prompt.ts";
+import type { ReasoningMode } from "./think-tool-mode.ts";
 import { type BashOperations, createLocalBashOperations } from "./tools/bash.ts";
 import { createAllToolDefinitions } from "./tools/index.ts";
+import { DEFAULT_THINK_TOOL_NAME } from "./tools/think.ts";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.ts";
 import { addUsageToTotals, createUsageTotals } from "./usage-totals.ts";
+
+/** Marker prefix for the think-tool empty-answer nudge (also the loop guard). */
+const THINK_ANSWER_NUDGE_MARKER = "[harness notice]";
 
 // ============================================================================
 // Skill Block Parsing
@@ -227,6 +237,10 @@ export interface AgentSessionConfig {
 	extensionRunnerRef?: { current?: ExtensionRunner };
 	/** Session start event metadata emitted when extensions bind to this runtime. */
 	sessionStartEvent?: SessionStartEvent;
+	/** Reasoning mode fixed at session start (see think-tool-mode.ts). */
+	reasoningMode?: ReasoningMode;
+	/** Scratchpad tool name when reasoningMode is "think-tool". */
+	thinkToolName?: string;
 }
 
 export interface ExtensionBindings {
@@ -313,6 +327,8 @@ export class AgentSession {
 	readonly settingsManager: SettingsManager;
 
 	private _scopedModels: Array<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
+	private _reasoningMode: ReasoningMode = "native";
+	private _thinkToolName: string = DEFAULT_THINK_TOOL_NAME;
 
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
@@ -396,12 +412,15 @@ export class AgentSession {
 		this._excludedToolNames = config.excludedToolNames ? new Set(config.excludedToolNames) : undefined;
 		this._baseToolsOverride = config.baseToolsOverride;
 		this._sessionStartEvent = config.sessionStartEvent ?? { type: "session_start", reason: "startup" };
+		this._reasoningMode = config.reasoningMode ?? "native";
+		this._thinkToolName = config.thinkToolName ?? DEFAULT_THINK_TOOL_NAME;
 
 		// Always subscribe to agent events for internal handling
 		// (session persistence, extensions, auto-compaction, retry logic)
 		this._unsubscribeAgent = this.agent.subscribe(this._handleAgentEvent);
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
+		this._installThinkToolAnswerNudge();
 
 		this._buildRuntime({
 			activeToolNames: this._initialActiveToolNames,
@@ -579,6 +598,58 @@ export class AgentSession {
 				model: this.agent.state.model,
 				thinkingLevel: this.agent.state.thinkingLevel,
 			};
+		};
+	}
+
+	/**
+	 * think-tool mode only: some models (notably haiku-class ones) occasionally
+	 * write their user-facing answer INTO the scratchpad `thoughts` and then end
+	 * the turn with an empty assistant message. Detect that pattern and enqueue a
+	 * harness follow-up telling the model to actually write the reply. At most
+	 * one nudge in a row (the guard checks the last user message).
+	 */
+	private _installThinkToolAnswerNudge(): void {
+		if (this._reasoningMode !== "think-tool") return;
+		const thinkToolName = this._thinkToolName;
+		const previous = this.agent.prepareNextTurnWithContext;
+		this.agent.prepareNextTurnWithContext = async (turn, signal) => {
+			const message = turn.message;
+			if (message.role === "assistant" && message.stopReason !== "error" && message.stopReason !== "aborted") {
+				const content = message.content ?? [];
+				const hasToolCalls = content.some((c) => c.type === "toolCall");
+				const hasVisibleText = content.some((c) => c.type === "text" && c.text.trim());
+				if (!hasToolCalls && !hasVisibleText) {
+					const thoughtThisRun = turn.newMessages.some(
+						(m) =>
+							m.role === "assistant" && m.content.some((c) => c.type === "toolCall" && c.name === thinkToolName),
+					);
+					const lastUser = [...turn.context.messages].reverse().find((m) => m.role === "user");
+					const lastUserText =
+						typeof lastUser?.content === "string"
+							? lastUser.content
+							: (lastUser?.content ?? [])
+									.filter((c) => c.type === "text")
+									.map((c) => ("text" in c ? c.text : ""))
+									.join(" ");
+					if (thoughtThisRun && !(lastUserText ?? "").includes(THINK_ANSWER_NUDGE_MARKER)) {
+						this.agent.followUp({
+							role: "user",
+							content: [
+								{
+									type: "text",
+									text:
+										`${THINK_ANSWER_NUDGE_MARKER} Your scratchpad note was recorded, but your visible ` +
+										"reply to the user was empty. If you still need tools, use them; otherwise write the " +
+										"actual reply now as a normal assistant message: plain text/markdown only, no XML, " +
+										"no thinking/invoke markup.",
+								},
+							],
+							timestamp: Date.now(),
+						});
+					}
+				}
+			}
+			return previous?.(turn, signal);
 		};
 	}
 

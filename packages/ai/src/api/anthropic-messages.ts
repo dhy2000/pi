@@ -67,7 +67,7 @@ function getCacheControl(
 	env?: ProviderEnv,
 ): { retention: CacheRetention; cacheControl?: CacheControlEphemeral } {
 	const retention = resolveCacheRetention(cacheRetention, env);
-	if (retention === "none") {
+	if (retention === "none" || !getAnthropicCompat(model).supportsPromptCaching) {
 		return { retention };
 	}
 	const ttl = retention === "long" && getAnthropicCompat(model).supportsLongCacheRetention ? "1h" : undefined;
@@ -192,6 +192,7 @@ function getAnthropicCompat(
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
 		sendSessionAffinityHeaders: model.compat?.sendSessionAffinityHeaders ?? false,
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? true,
+		supportsPromptCaching: model.compat?.supportsPromptCaching ?? true,
 		supportsTemperature: model.compat?.supportsTemperature ?? true,
 		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
 		supportsStrictTools: model.compat?.supportsStrictTools ?? false,

@@ -478,6 +478,14 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 */
 	executionMode?: ToolExecutionMode;
 
+	/**
+	 * When true, this tool is still executed (with best-effort salvaged
+	 * arguments) if the assistant message was cut off by the output token limit
+	 * mid-call, instead of being failed like every other tool call. Only safe
+	 * for tools whose truncated arguments are harmless (free-text scratchpads).
+	 */
+	salvageTruncatedArgs?: boolean;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,

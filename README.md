@@ -1,3 +1,92 @@
+# pi-think — the pi agent with custom think enabled
+
+> **pi-think** is a fork of the [pi](https://github.com/earendil-works/pi) coding
+> agent that adds one feature on top of an otherwise untouched upstream: a
+> startup-selected **think-tool reasoning mode**. With it, the model's
+> chain-of-thought is externalized into a plaintext scratchpad **tool call**, so
+> the full reasoning becomes visible — live in the TUI, and persisted in the
+> session file — even for models whose native thinking is hidden, summarized, or
+> encrypted. Everything below the separator is upstream pi documentation.
+
+## What it does
+
+Frontier-model APIs increasingly conceal chain-of-thought: summarized thinking, or
+fully encrypted thinking blocks (opaque `signature`, empty text). pi-think
+operationalizes the **scratchpad-tool injection** method inside a full coding agent:
+
+- A benign free-text scratchpad tool (default name `think`, parameter `thoughts`) is
+  registered. Tool arguments are plaintext-visible to the API caller by protocol
+  necessity — function calling cannot work otherwise.
+- The model is steered (system prompt + a forced first call per user prompt) to write
+  its step-by-step reasoning into `thoughts`, and the TUI renders it like native
+  thinking. The CoT persists in the session transcript as ordinary tool calls, so it
+  stays readable across `/model` switches and is saved in the session file.
+
+The mechanism is **dialect-generic**: request shaping keys off the model's API family
+(`anthropic-messages` / `openai-completions` / `openai-responses`), never a specific
+provider, so it works with any tool-calling model on those dialects — including
+Anthropic-compatible gateways and OpenAI-compatible endpoints configured in
+`~/.pi/agent/models.json`. No provider is hardcoded.
+
+## Install
+
+```bash
+git clone https://github.com/ict-agent/pi-think.git
+cd pi-think
+npm install
+npm run build
+
+# run from the repo:
+node packages/coding-agent/dist/cli.js --reasoning-mode think-tool
+
+# or put the `pi` binary on your PATH:
+(cd packages/coding-agent && npm link)
+pi --reasoning-mode think-tool
+```
+
+Requires Node.js (see upstream pi's prerequisites). All stock pi configuration
+(`~/.pi/agent`, providers, models, themes, extensions) works unchanged — pi-think
+only adds the reasoning-mode flags.
+
+## Usage
+
+```bash
+pi --reasoning-mode think-tool --model <provider>/<model>   # CoT visible, live
+pi --reasoning-mode think-tool --think-tool-name deep_think # custom scratchpad name
+pi --reasoning-mode native                                  # stock pi (default)
+PI_WIRE_LOG=/tmp/wire.jsonl pi --reasoning-mode think-tool  # + raw request/response log
+```
+
+- `--reasoning-mode` is fixed at startup; there is no runtime switching. `native` is
+  unmodified pi.
+- In think-tool mode, Anthropic-dialect reasoning models get `thinking: {"type":
+  "disabled"}` pinned on the wire, and the scratchpad call is forced via
+  `tool_choice` on fresh user prompts (continuation turns run `auto`, so thinking
+  interleaves with real tool use). The same forcing applies on the OpenAI Chat and
+  Responses dialects.
+- A scratchpad call truncated by the output token limit is recorded with its
+  salvaged partial arguments and the model is asked to continue — reasoning length
+  is unbounded.
+- If a model writes its visible reply into the scratchpad and ends the turn with an
+  empty message (observed with haiku-class models), the harness enqueues a one-shot
+  nudge telling it to write the actual reply.
+- `PI_WIRE_LOG` appends every raw LLM request/response body (JSONL; SSE responses
+  reassembled) — the on-the-wire ground truth for exactly what thinking/tool payloads
+  were sent and received.
+
+### Change map vs upstream
+
+- `packages/agent`: `AgentTool.salvageTruncatedArgs` + truncated-message salvage path
+  in the agent loop.
+- `packages/ai`: anthropic compat flag `supportsPromptCaching` (providers whose
+  non-Claude upstreams reject `cache_control`).
+- `packages/coding-agent`: `core/tools/think.ts` (scratchpad tool + TUI renderer),
+  `core/think-tool-mode.ts` (dialect-generic payload shaping), `core/wire-log.ts`
+  (`PI_WIRE_LOG`), empty-answer nudge in `agent-session.ts`, `--reasoning-mode` /
+  `--think-tool-name` CLI flags, sdk wiring.
+
+---
+
 <p align="center">
   <a href="https://pi.dev">
     <img alt="pi logo" src="https://pi.dev/logo-auto.svg" width="128">

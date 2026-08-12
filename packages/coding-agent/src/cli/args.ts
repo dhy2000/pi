@@ -10,6 +10,8 @@ import type { TuiMode } from "../core/settings-manager.ts";
 
 export type Mode = "text" | "json" | "rpc";
 
+export type ReasoningModeArg = "native" | "think-tool";
+
 export interface Args {
 	provider?: string;
 	model?: string;
@@ -17,6 +19,8 @@ export interface Args {
 	systemPrompt?: string;
 	appendSystemPrompt?: string[];
 	thinking?: ThinkingLevel;
+	reasoningMode?: ReasoningModeArg;
+	thinkToolName?: string;
 	continue?: boolean;
 	resume?: boolean;
 	help?: boolean;
@@ -154,6 +158,18 @@ export function parseArgs(args: string[]): Args {
 					message: `Invalid thinking level "${level}". Valid values: ${VALID_THINKING_LEVELS.join(", ")}`,
 				});
 			}
+		} else if (arg === "--reasoning-mode" && i + 1 < args.length) {
+			const mode = args[++i];
+			if (mode === "native" || mode === "think-tool") {
+				result.reasoningMode = mode;
+			} else {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid reasoning mode "${mode}". Valid values: native, think-tool`,
+				});
+			}
+		} else if (arg === "--think-tool-name" && i + 1 < args.length) {
+			result.thinkToolName = args[++i];
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 			const next = args[i + 1];
@@ -299,6 +315,11 @@ ${chalk.bold("Options:")}
   --exclude-tools, -xt <tools>   Comma-separated denylist of tool names to disable
                                  Applies to built-in, extension, and custom tools
   --thinking <level>             Set thinking level: off, minimal, low, medium, high, xhigh, max
+  --reasoning-mode <mode>        Reasoning mode for the session (fixed at startup):
+                                 native (default) = provider-native thinking;
+                                 think-tool = disable native thinking and route reasoning
+                                 through a plaintext scratchpad tool (visible CoT)
+  --think-tool-name <name>       Scratchpad tool name for think-tool mode (default: think)
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)

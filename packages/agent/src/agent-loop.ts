@@ -225,11 +225,13 @@ async function runLoop(
 			hasMoreToolCalls = false;
 			if (toolCalls.length > 0) {
 				// A "length" stop means the output was cut off by the token limit, so
-				// every tool call in the message may carry truncated arguments. Fail
-				// them all instead of executing potentially borked calls.
+				// tool call arguments may be truncated. Calls whose tool opts into
+				// `salvageTruncatedArgs` (free-text scratchpad tools such as `think`)
+				// are still executed — truncated text is valuable there — while every
+				// other call is failed instead of executing potentially borked args.
 				const executedToolBatch =
 					message.stopReason === "length"
-						? await failToolCallsFromTruncatedMessage(toolCalls, emit)
+						? await executeToolCallsFromTruncatedMessage(currentContext, message, config, signal, emit, toolCalls)
 						: await executeToolCalls(currentContext, message, config, signal, emit);
 				toolResults.push(...executedToolBatch.messages);
 				hasMoreToolCalls = !executedToolBatch.terminate;
@@ -367,6 +369,65 @@ async function streamAssistantResponse(
 	}
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
+}
+
+/**
+ * Handle tool calls from an assistant message truncated by the output token
+ * limit. Streamed tool-call arguments are finalized with a best-effort JSON
+ * salvage parser, so a truncated message can yield tool calls whose arguments
+ * parse and validate but are silently incomplete.
+ *
+ * Calls whose tool declares `salvageTruncatedArgs` (e.g. a free-text
+ * scratchpad tool, where truncated text is still worth recording) are executed
+ * with their salvaged arguments and get a continuation note appended, so the
+ * model resumes exactly where it was cut off. All other calls are failed —
+ * executing them would be unsafe.
+ */
+async function executeToolCallsFromTruncatedMessage(
+	currentContext: AgentContext,
+	assistantMessage: AssistantMessage,
+	config: AgentLoopConfig,
+	signal: AbortSignal | undefined,
+	emit: AgentEventSink,
+	toolCalls: AgentToolCall[],
+): Promise<ExecutedToolCallBatch> {
+	const isSalvageable = (toolCall: AgentToolCall): boolean =>
+		currentContext.tools?.find((t) => t.name === toolCall.name)?.salvageTruncatedArgs === true;
+	const salvageable = toolCalls.filter(isSalvageable);
+	const unsalvageable = toolCalls.filter((toolCall) => !isSalvageable(toolCall));
+
+	const batches: ExecutedToolCallBatch[] = [];
+	if (unsalvageable.length > 0) {
+		batches.push(await failToolCallsFromTruncatedMessage(unsalvageable, emit));
+	}
+	if (salvageable.length > 0) {
+		// Run the salvageable calls through the normal execution path by viewing
+		// the assistant message with only those calls present.
+		const salvagedMessage: AssistantMessage = {
+			...assistantMessage,
+			content: assistantMessage.content.filter((c) => c.type !== "toolCall" || isSalvageable(c)),
+		};
+		const batch = await executeToolCalls(currentContext, salvagedMessage, config, signal, emit);
+		for (const resultMessage of batch.messages) {
+			resultMessage.content = [
+				...resultMessage.content,
+				{
+					type: "text",
+					text:
+						`Output limit reached mid-call; the partial ${JSON.stringify(resultMessage.toolName)} note above was recorded. ` +
+						`Continue reasoning in the next ${resultMessage.toolName} call, picking up exactly where you left off.`,
+				},
+			];
+		}
+		batches.push(batch);
+	}
+
+	// Keep tool results in assistant source order, matching the untruncated path.
+	const order = new Map(toolCalls.map((toolCall, index) => [toolCall.id, index]));
+	const messages = batches
+		.flatMap((batch) => batch.messages)
+		.sort((a, b) => (order.get(a.toolCallId) ?? 0) - (order.get(b.toolCallId) ?? 0));
+	return { messages, terminate: batches.some((batch) => batch.terminate) };
 }
 
 /**

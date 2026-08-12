@@ -409,6 +409,13 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * If omitted, the default execution mode applies.
 	 */
 	executionMode?: ToolExecutionMode;
+	/**
+	 * When true, this tool is still executed (with best-effort salvaged arguments)
+	 * if the assistant message was cut off by the output token limit mid-call,
+	 * instead of being failed like every other tool call. Only safe for tools
+	 * whose truncated arguments are harmless (e.g. free-text scratchpad tools).
+	 */
+	salvageTruncatedArgs?: boolean;
 }
 
 /** Context snapshot passed into the low-level agent loop. */

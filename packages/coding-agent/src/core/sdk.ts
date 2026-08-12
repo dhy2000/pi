@@ -15,6 +15,7 @@ import type { ResourceLoader } from "./resource-loader.ts";
 import { DefaultResourceLoader } from "./resource-loader.ts";
 import { getDefaultSessionDir, SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
+import { applyThinkToolPayload, type ReasoningMode } from "./think-tool-mode.ts";
 import { time } from "./timings.ts";
 import {
 	createBashTool,
@@ -30,11 +31,28 @@ import {
 	type ToolName,
 	withFileMutationQueue,
 } from "./tools/index.ts";
+import { createThinkToolDefinition, DEFAULT_THINK_TOOL_NAME, THINK_TOOL_NAME_PATTERN } from "./tools/think.ts";
+import { createWireTapFetch, WIRE_LOG_ENV } from "./wire-log.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
 // or invoke low-level agent loops without supplying streamFn. Agent core remains
 // provider-agnostic and does not import pi-ai/compat itself.
 setDefaultStreamFn(streamSimple);
+
+// Optional raw wire logging (PI_WIRE_LOG=<path>): lazily created on first use so
+// the tap costs nothing when disabled.
+let wireTapFetch: typeof globalThis.fetch | undefined;
+let wireTapResolved = false;
+function getWireTapFetch(): typeof globalThis.fetch | undefined {
+	if (!wireTapResolved) {
+		wireTapResolved = true;
+		const logPath = process.env[WIRE_LOG_ENV];
+		if (logPath) {
+			wireTapFetch = createWireTapFetch(logPath);
+		}
+	}
+	return wireTapFetch;
+}
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -74,6 +92,17 @@ export interface CreateAgentSessionOptions {
 	excludeTools?: string[];
 	/** Custom tools to register (in addition to built-in tools). */
 	customTools?: ToolDefinition[];
+
+	/**
+	 * Reasoning mode, fixed at session start (no runtime switching).
+	 * - "native" (default): stock pi behavior — provider-native thinking, if any.
+	 * - "think-tool": scratchpad-tool injection — native thinking is disabled
+	 *   and a free-text scratchpad tool (`thinkToolName`) is registered so the
+	 *   model externalizes its chain-of-thought into plaintext tool arguments.
+	 */
+	reasoningMode?: ReasoningMode;
+	/** Scratchpad tool name for "think-tool" mode. Default: "think". */
+	thinkToolName?: string;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -182,6 +211,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const sessionManager = options.sessionManager ?? SessionManager.create(cwd, getDefaultSessionDir(cwd, agentDir));
 
+	// Reasoning mode is fixed at session start; no runtime switching.
+	const reasoningMode: ReasoningMode = options.reasoningMode ?? "native";
+	const thinkToolName = options.thinkToolName ?? DEFAULT_THINK_TOOL_NAME;
+	if (reasoningMode === "think-tool" && !THINK_TOOL_NAME_PATTERN.test(thinkToolName)) {
+		throw new Error(`Invalid think-tool name "${thinkToolName}" (must match /^[a-zA-Z0-9_-]{1,64}$/)`);
+	}
+
 	if (!resourceLoader) {
 		resourceLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager });
 		await resourceLoader.reload();
@@ -252,6 +288,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	} else {
 		thinkingLevel = clampThinkingLevel(model, thinkingLevel) as ThinkingLevel;
 	}
+	if (reasoningMode === "think-tool") {
+		// The scratchpad tool replaces native thinking: keep it off so reasoning
+		// cannot hide in a summarized/encrypted channel. The payload hook below
+		// additionally pins `thinking: {"type": "disabled"}` on the wire.
+		thinkingLevel = "off";
+	}
 
 	const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
 	const configuredDefaultToolNames = settingsManager.getDefaultTools();
@@ -261,6 +303,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const initialActiveToolNames = (
 		options.tools ?? (options.noTools ? [] : (configuredDefaultToolNames ?? defaultActiveToolNames))
 	).filter((name) => !excludedToolNameSet?.has(name));
+	if (reasoningMode === "think-tool" && !excludedToolNameSet?.has(thinkToolName)) {
+		initialActiveToolNames.push(thinkToolName);
+	}
 
 	let agent: Agent;
 
@@ -321,8 +366,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			const websocketConnectTimeoutMs =
 				options?.websocketConnectTimeoutMs ?? settingsManager.getWebSocketConnectTimeoutMs();
 			const headerRunner = extensionRunnerRef.current;
+			const wireFetch = getWireTapFetch();
 			return modelRuntime.streamSimple(model, context, {
 				...options,
+				...(wireFetch ? { fetch: wireFetch } : {}),
 				timeoutMs,
 				websocketConnectTimeoutMs,
 				maxRetries: options?.maxRetries ?? providerRetrySettings.maxRetries,
@@ -341,6 +388,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			});
 		},
 		onPayload: async (payload, _model) => {
+			if (reasoningMode === "think-tool") {
+				applyThinkToolPayload(payload, _model, thinkToolName);
+			}
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
 				return payload;
@@ -392,13 +442,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		cwd,
 		scopedModels: options.scopedModels,
 		resourceLoader,
-		customTools: options.customTools,
+		customTools: [
+			...(options.customTools ?? []),
+			...(reasoningMode === "think-tool" ? [createThinkToolDefinition(thinkToolName)] : []),
+		],
 		modelRuntime,
 		initialActiveToolNames,
 		allowedToolNames,
 		excludedToolNames,
 		extensionRunnerRef,
 		sessionStartEvent: options.sessionStartEvent,
+		reasoningMode,
+		thinkToolName,
 	});
 	const extensionsResult = resourceLoader.getExtensions();
 

@@ -62,6 +62,8 @@ export interface CreateAgentSessionFromServicesOptions {
 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
 	noTools?: CreateAgentSessionOptions["noTools"];
 	customTools?: ToolDefinition[];
+	reasoningMode?: CreateAgentSessionOptions["reasoningMode"];
+	thinkToolName?: CreateAgentSessionOptions["thinkToolName"];
 }
 
 /**
@@ -216,6 +218,8 @@ export async function createAgentSessionFromServices(
 		excludeTools: options.excludeTools,
 		noTools: options.noTools,
 		customTools: options.customTools,
+		reasoningMode: options.reasoningMode,
+		thinkToolName: options.thinkToolName,
 		sessionStartEvent: options.sessionStartEvent,
 	});
 }
