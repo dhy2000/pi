@@ -416,6 +416,13 @@ export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any
 	 * whose truncated arguments are harmless (e.g. free-text scratchpad tools).
 	 */
 	salvageTruncatedArgs?: boolean;
+	/**
+	 * Custom note appended to the tool result when a salvaged (truncated) call is
+	 * recorded. Overrides the default "continue where you left off" instruction —
+	 * e.g. a budget-capped scratchpad can tell the model to stop reasoning and
+	 * answer instead of continuing.
+	 */
+	truncationNote?: string;
 }
 
 /** Context snapshot passed into the low-level agent loop. */

@@ -27,6 +27,43 @@ import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
 
 export const DEFAULT_THINK_TOOL_NAME = "think";
 
+/** Reasoning-effort levels for think-tool mode — mirrors pi's ThinkingLevel scale
+ * (and the OpenAI/Anthropic effort conventions) so each think-tool effort cell can
+ * be compared 1:1 against the same native thinking level. */
+export type ThinkToolEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+
+export const THINK_TOOL_EFFORTS: readonly ThinkToolEffort[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
+
+export function isThinkToolEffort(value: string): value is ThinkToolEffort {
+	return (THINK_TOOL_EFFORTS as readonly string[]).includes(value);
+}
+
+/**
+ * Hard output cap (tokens) applied to the forced first scratchpad call per level.
+ * Values mirror pi's native thinking budgets (minimal 1024 / low 2048 / medium
+ * 8192 / high 16384), extended with xhigh; unlike native budgets the whole cap is
+ * usable CoT, because the forced think turn contains only the scratchpad call —
+ * the answer is produced in a separate, uncapped turn. "max" = uncapped (the
+ * truncation-salvage continuation keeps reasoning unbounded).
+ */
+export const THINK_EFFORT_MAX_TOKENS: Record<Exclude<ThinkToolEffort, "max">, number> = {
+	minimal: 1024,
+	low: 2048,
+	medium: 8192,
+	high: 16384,
+	xhigh: 32768,
+};
+
+export interface ThinkToolOptions {
+	/**
+	 * Reasoning effort for the scratchpad. Unset or "max" = unbounded: truncated
+	 * notes are continued in follow-up calls. Capped levels: the model is
+	 * instructed to stay under the budget, the forced first call is hard-capped,
+	 * and a truncated note ends reasoning ("wrap up and answer") instead of continuing.
+	 */
+	effort?: ThinkToolEffort;
+}
+
 const THINK_TOOL_DESCRIPTION =
 	"External scratchpad. Use it for ALL step-by-step reasoning before " +
 	"answering or acting. Content is not shown to the user.";
@@ -45,11 +82,21 @@ export interface ThinkToolDetails {
 /** Anthropic-style tool name rule; keeps a configured tool name wire-safe. */
 export const THINK_TOOL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
-export function thinkToolPromptGuidelines(toolName: string): string[] {
-	return [
+export function thinkToolPromptGuidelines(toolName: string, effort?: ThinkToolEffort): string[] {
+	const guidelines = [
 		`Use the ${toolName} tool for ALL step-by-step reasoning: before answering the user, before any non-trivial tool call, and after tool results when deciding what to do next. Reason silently as little as possible — record your reasoning in ${toolName} first, then act.`,
-		`If a ${toolName} note was cut off by the output limit, continue reasoning in the next ${toolName} call exactly where you left off.`,
 	];
+	const budget = effort && effort !== "max" ? THINK_EFFORT_MAX_TOKENS[effort] : undefined;
+	if (budget) {
+		guidelines.push(
+			`Keep each ${toolName} note under roughly ${budget} tokens: prioritize the decisive steps, skip restatements and alternatives.`,
+		);
+	} else {
+		guidelines.push(
+			`If a ${toolName} note was cut off by the output limit, continue reasoning in the next ${toolName} call exactly where you left off.`,
+		);
+	}
+	return guidelines;
 }
 
 function formatThinkCall(thoughts: string, theme: Theme, expanded: boolean): string {
@@ -86,20 +133,35 @@ function recordedOf(details: unknown): number | undefined {
 	return undefined;
 }
 
-export function createThinkToolDefinition(toolName: string = DEFAULT_THINK_TOOL_NAME): ToolDefinition {
+export function createThinkToolDefinition(
+	toolName: string = DEFAULT_THINK_TOOL_NAME,
+	options: ThinkToolOptions = {},
+): ToolDefinition {
 	if (!THINK_TOOL_NAME_PATTERN.test(toolName)) {
 		throw new Error(`Invalid think-tool name "${toolName}" (must match /^[a-zA-Z0-9_-]{1,64}$/)`);
 	}
+	const effort = options.effort;
+	const budget = effort && effort !== "max" ? THINK_EFFORT_MAX_TOKENS[effort] : undefined;
+	const description = budget
+		? `${THINK_TOOL_DESCRIPTION} Keep each note under roughly ${budget} tokens.`
+		: THINK_TOOL_DESCRIPTION;
 	let recorded = 0;
 	return {
 		name: toolName,
 		label: toolName,
-		description: THINK_TOOL_DESCRIPTION,
-		promptGuidelines: thinkToolPromptGuidelines(toolName),
+		description,
+		promptGuidelines: thinkToolPromptGuidelines(toolName, effort),
 		parameters: thinkSchema,
-		// Truncated thoughts are still valuable: record the salvaged prefix and
-		// let the loop ask the model to continue (see agent-loop.ts).
+		// Truncated thoughts are still valuable: record the salvaged prefix. With a
+		// capped effort the truncation note ends reasoning instead of continuing it.
 		salvageTruncatedArgs: true,
+		...(budget
+			? {
+					truncationNote:
+						"Scratchpad reasoning budget reached (output limit hit). Do NOT continue reasoning — " +
+						"wrap up and write your answer now based on what you have.",
+				}
+			: {}),
 		async execute() {
 			// The note itself already lives in the transcript as the call's
 			// arguments; execution only acknowledges it with a running counter.

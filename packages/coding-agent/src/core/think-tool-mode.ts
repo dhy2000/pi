@@ -39,7 +39,31 @@ type ThinkToolPayload = {
 	tools?: Array<{ name?: string; function?: { name?: string } }>;
 	thinking?: unknown;
 	tool_choice?: unknown;
+	max_tokens?: number;
+	max_completion_tokens?: number;
+	max_output_tokens?: number;
 };
+
+/**
+ * Apply the effort cap to the dialect's output-token field. Only ever called on
+ * the forced scratchpad turn (a fresh user prompt), whose entire output is the
+ * think call — the answer turn is never capped. openai-codex-responses is
+ * deliberately skipped: the Codex backend rejects max_output_tokens outright, so
+ * effort control there is soft (instruction-level) only.
+ */
+function applyEffortCap(p: ThinkToolPayload, api: string, cap: number): void {
+	if (api === "anthropic-messages") {
+		p.max_tokens = cap;
+	} else if (api === "openai-completions") {
+		if (p.max_completion_tokens !== undefined || p.max_tokens === undefined) {
+			p.max_completion_tokens = cap;
+		} else {
+			p.max_tokens = cap;
+		}
+	} else if (api === "openai-responses") {
+		p.max_output_tokens = Math.max(cap, 16); // Responses rejects max_output_tokens < 16
+	}
+}
 
 /**
  * True when the last wire message is a fresh user prompt (as opposed to a
@@ -61,7 +85,12 @@ function isFreshUserPrompt(last: PayloadMessage | undefined): boolean {
  * tool_choice shape, and only when the scratchpad tool is actually present in
  * the request.
  */
-export function applyThinkToolPayload(payload: unknown, model: Model<Api>, toolName: string): void {
+export function applyThinkToolPayload(
+	payload: unknown,
+	model: Model<Api>,
+	toolName: string,
+	effortMaxTokens?: number,
+): void {
 	const p = payload as ThinkToolPayload;
 	if (!p || !Array.isArray(p.tools)) return;
 	const scratchpadPresent = p.tools.some((tool) => tool?.name === toolName || tool?.function?.name === toolName);
@@ -77,6 +106,7 @@ export function applyThinkToolPayload(payload: unknown, model: Model<Api>, toolN
 		}
 		if (isFreshUserPrompt(p.messages.at(-1))) {
 			p.tool_choice = { type: "tool", name: toolName };
+			if (effortMaxTokens) applyEffortCap(p, model.api, effortMaxTokens);
 		} else if (p.tool_choice !== undefined) {
 			p.tool_choice = undefined;
 		}
@@ -89,6 +119,7 @@ export function applyThinkToolPayload(payload: unknown, model: Model<Api>, toolN
 		// call only.
 		if (isFreshUserPrompt(p.messages.at(-1))) {
 			p.tool_choice = { type: "function", function: { name: toolName } };
+			if (effortMaxTokens) applyEffortCap(p, model.api, effortMaxTokens);
 		} else if (p.tool_choice !== undefined) {
 			p.tool_choice = undefined;
 		}
@@ -104,6 +135,7 @@ export function applyThinkToolPayload(payload: unknown, model: Model<Api>, toolN
 		const isFresh = last?.role === "user" && last?.type !== "function_call_output";
 		if (isFresh) {
 			p.tool_choice = { type: "function", name: toolName };
+			if (effortMaxTokens) applyEffortCap(p, model.api, effortMaxTokens);
 		} else if (p.tool_choice !== undefined && typeof p.tool_choice !== "string") {
 			p.tool_choice = "auto";
 		}

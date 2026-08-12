@@ -37,6 +37,7 @@ import { APP_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir,
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
+	type CreateAgentSessionFromServicesOptions,
 	createAgentSessionFromServices,
 	createAgentSessionServices,
 } from "./core/agent-session-services.ts";
@@ -827,6 +828,7 @@ export async function main(args: string[], options?: MainOptions) {
 			customTools: sessionOptions.customTools,
 			reasoningMode: parsed.reasoningMode,
 			thinkToolName: parsed.thinkToolName,
+			thinkToolEffort: parsed.thinkEffort as CreateAgentSessionFromServicesOptions["thinkToolEffort"],
 		});
 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 		if (created.session.model && cliThinkingOverride) {

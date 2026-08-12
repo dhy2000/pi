@@ -486,6 +486,12 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
 	 */
 	salvageTruncatedArgs?: boolean;
 
+	/**
+	 * Custom note appended to the tool result when a salvaged (truncated) call
+	 * is recorded, overriding the default "continue" instruction.
+	 */
+	truncationNote?: string;
+
 	/** Execute the tool. */
 	execute(
 		toolCallId: string,

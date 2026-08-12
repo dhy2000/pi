@@ -15,6 +15,7 @@ export function wrapToolDefinition<TDetails = unknown>(
 		prepareArguments: definition.prepareArguments,
 		executionMode: definition.executionMode,
 		salvageTruncatedArgs: definition.salvageTruncatedArgs,
+		truncationNote: definition.truncationNote,
 		execute: (toolCallId, params, signal, onUpdate, ctx?: ExtensionContext) =>
 			definition.execute(toolCallId, params, signal, onUpdate, ctx ?? (ctxFactory?.() as ExtensionContext)),
 	};

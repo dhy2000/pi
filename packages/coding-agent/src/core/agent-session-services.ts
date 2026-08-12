@@ -64,6 +64,7 @@ export interface CreateAgentSessionFromServicesOptions {
 	customTools?: ToolDefinition[];
 	reasoningMode?: CreateAgentSessionOptions["reasoningMode"];
 	thinkToolName?: CreateAgentSessionOptions["thinkToolName"];
+	thinkToolEffort?: CreateAgentSessionOptions["thinkToolEffort"];
 }
 
 /**
@@ -220,6 +221,7 @@ export async function createAgentSessionFromServices(
 		customTools: options.customTools,
 		reasoningMode: options.reasoningMode,
 		thinkToolName: options.thinkToolName,
+		thinkToolEffort: options.thinkToolEffort,
 		sessionStartEvent: options.sessionStartEvent,
 	});
 }

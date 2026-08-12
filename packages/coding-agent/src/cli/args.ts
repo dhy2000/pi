@@ -21,6 +21,7 @@ export interface Args {
 	thinking?: ThinkingLevel;
 	reasoningMode?: ReasoningModeArg;
 	thinkToolName?: string;
+	thinkEffort?: string;
 	continue?: boolean;
 	resume?: boolean;
 	help?: boolean;
@@ -62,6 +63,7 @@ export interface Args {
 }
 
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const VALID_THINK_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max"];
 
 export function isValidThinkingLevel(level: string): level is ThinkingLevel {
 	return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
@@ -170,6 +172,16 @@ export function parseArgs(args: string[]): Args {
 			}
 		} else if (arg === "--think-tool-name" && i + 1 < args.length) {
 			result.thinkToolName = args[++i];
+		} else if (arg === "--think-effort" && i + 1 < args.length) {
+			const level = args[++i];
+			if (VALID_THINK_EFFORTS.includes(level)) {
+				result.thinkEffort = level;
+			} else {
+				result.diagnostics.push({
+					type: "error",
+					message: `Invalid think effort "${level}". Valid values: ${VALID_THINK_EFFORTS.join(", ")}`,
+				});
+			}
 		} else if (arg === "--print" || arg === "-p") {
 			result.print = true;
 			const next = args[i + 1];
@@ -320,6 +332,10 @@ ${chalk.bold("Options:")}
                                  think-tool = disable native thinking and route reasoning
                                  through a plaintext scratchpad tool (visible CoT)
   --think-tool-name <name>       Scratchpad tool name for think-tool mode (default: think)
+  --think-effort <level>         Scratchpad reasoning budget for think-tool mode:
+                                 minimal (~1k tokens), low (~2k), medium (~8k),
+                                 high (~16k), xhigh (~32k), max (uncapped, default)
+                                 Mirrors --thinking levels for 1:1 native-vs-tool comparisons
   --extension, -e <path>         Load an extension file (can be used multiple times)
   --no-extensions, -ne           Disable extension discovery (explicit -e paths still work)
   --skill <path>                 Load a skill file or directory (can be used multiple times)

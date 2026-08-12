@@ -409,13 +409,15 @@ async function executeToolCallsFromTruncatedMessage(
 		};
 		const batch = await executeToolCalls(currentContext, salvagedMessage, config, signal, emit);
 		for (const resultMessage of batch.messages) {
+			const tool = currentContext.tools?.find((t) => t.name === resultMessage.toolName);
 			resultMessage.content = [
 				...resultMessage.content,
 				{
 					type: "text",
 					text:
+						tool?.truncationNote ??
 						`Output limit reached mid-call; the partial ${JSON.stringify(resultMessage.toolName)} note above was recorded. ` +
-						`Continue reasoning in the next ${resultMessage.toolName} call, picking up exactly where you left off.`,
+							`Continue reasoning in the next ${resultMessage.toolName} call, picking up exactly where you left off.`,
 				},
 			];
 		}

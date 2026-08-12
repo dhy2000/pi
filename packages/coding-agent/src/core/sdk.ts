@@ -31,7 +31,13 @@ import {
 	type ToolName,
 	withFileMutationQueue,
 } from "./tools/index.ts";
-import { createThinkToolDefinition, DEFAULT_THINK_TOOL_NAME, THINK_TOOL_NAME_PATTERN } from "./tools/think.ts";
+import {
+	createThinkToolDefinition,
+	DEFAULT_THINK_TOOL_NAME,
+	THINK_EFFORT_MAX_TOKENS,
+	THINK_TOOL_NAME_PATTERN,
+	type ThinkToolEffort,
+} from "./tools/think.ts";
 import { createWireTapFetch, WIRE_LOG_ENV } from "./wire-log.ts";
 
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
@@ -103,6 +109,13 @@ export interface CreateAgentSessionOptions {
 	reasoningMode?: ReasoningMode;
 	/** Scratchpad tool name for "think-tool" mode. Default: "think". */
 	thinkToolName?: string;
+	/**
+	 * Scratchpad reasoning effort for "think-tool" mode — mirrors ThinkingLevel
+	 * budgets (minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768 /
+	 * max uncapped). Caps the forced first scratchpad call; the answer turn is
+	 * never capped. Default: undefined (uncapped, truncation-continued).
+	 */
+	thinkToolEffort?: ThinkToolEffort;
 
 	/** Resource loader. When omitted, DefaultResourceLoader is used. */
 	resourceLoader?: ResourceLoader;
@@ -214,6 +227,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	// Reasoning mode is fixed at session start; no runtime switching.
 	const reasoningMode: ReasoningMode = options.reasoningMode ?? "native";
 	const thinkToolName = options.thinkToolName ?? DEFAULT_THINK_TOOL_NAME;
+	const thinkToolEffort = options.thinkToolEffort;
+	const thinkEffortMaxTokens =
+		thinkToolEffort && thinkToolEffort !== "max" ? THINK_EFFORT_MAX_TOKENS[thinkToolEffort] : undefined;
 	if (reasoningMode === "think-tool" && !THINK_TOOL_NAME_PATTERN.test(thinkToolName)) {
 		throw new Error(`Invalid think-tool name "${thinkToolName}" (must match /^[a-zA-Z0-9_-]{1,64}$/)`);
 	}
@@ -389,7 +405,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		},
 		onPayload: async (payload, _model) => {
 			if (reasoningMode === "think-tool") {
-				applyThinkToolPayload(payload, _model, thinkToolName);
+				applyThinkToolPayload(payload, _model, thinkToolName, thinkEffortMaxTokens);
 			}
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {
@@ -444,7 +460,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		resourceLoader,
 		customTools: [
 			...(options.customTools ?? []),
-			...(reasoningMode === "think-tool" ? [createThinkToolDefinition(thinkToolName)] : []),
+			...(reasoningMode === "think-tool"
+				? [createThinkToolDefinition(thinkToolName, { effort: thinkToolEffort })]
+				: []),
 		],
 		modelRuntime,
 		initialActiveToolNames,
