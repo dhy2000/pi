@@ -1726,7 +1726,14 @@ async function loadModelsDevData(): Promise<Model<any>[]> {
 		// Process Cloudflare AI Gateway models
 		const cloudflareAIGatewayModelIds = new Set<string>();
 		if (data["cloudflare-ai-gateway"]?.models) {
-			for (const [prefixedId, model] of Object.entries(data["cloudflare-ai-gateway"].models)) {
+			// models.dev no longer catalogs workers-ai gateway entries, so mirror the
+			// Cloudflare Workers AI catalog as `workers-ai/*` compat models.
+			const gatewayModels = { ...data["cloudflare-ai-gateway"].models };
+			for (const [modelId, model] of Object.entries(data["cloudflare-workers-ai"]?.models ?? {})) {
+				const gatewayId = `workers-ai/${modelId}`;
+				if (!(gatewayId in gatewayModels)) gatewayModels[gatewayId] = model;
+			}
+			for (const [prefixedId, model] of Object.entries(gatewayModels)) {
 				const m = model as ModelsDevModel;
 				if (m.tool_call !== true) continue;
 
